@@ -12,6 +12,8 @@ profile:
   target_cities: ["北京"]
   salary_min: 15  # K
   salary_max: 25  # K
+  salary_ceil_ratio: 1.5  # 岗位薪资下限超过 salary_max × 该倍数时过滤
+  filter_unparsed_salary: true  # 过滤面议或无法解析薪资的岗位
   allow_internship: false
   deal_breakers: ["外包", "996"]
   jd_deal_breakers: []  # 示例：需要排除完整 JD 中的词时再填写
@@ -69,6 +71,16 @@ platforms:
       city_codes: {"上海": "020000"}
       max_pages: 1
       sort: default
+  liepin:
+    enabled: false
+    # 猎聘目前只开放采集/评分/招呼语生成，真实发送和监听仍锁定。
+    search:
+      keywords: []
+      cities: []
+      # 只需填写城市名称；BossHunter 会从内置猎聘目录自动匹配城市编码。
+      city_codes: {}
+      max_pages: 1
+      sort: default
 
 scoring:
   threshold: 70
@@ -106,6 +118,8 @@ ai:
   # greeting_timeout_seconds: 180
   greeting_review_threshold: 7
   greeting_max_iterations: 2
+  greeting_style_suggestions: true  # 生成原文与优化预览；关闭后只保留首次生成结果
+  greeting_auto_apply_style: false  # 默认不自动替换，需在页面选择原文或优化版
   resume_max_pages: 3
   # 建议在本地面板填写 api_key；它会单独保存在忽略提交的本地凭据文件中，不写入 config.yaml
   # base_url 填写后优先生效；留空时才读取对应环境变量或使用服务商默认地址

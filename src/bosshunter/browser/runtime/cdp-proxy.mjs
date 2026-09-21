@@ -95,6 +95,12 @@ async function discoverChromePort() {
       if (port > 0 && port < 65536 && await checkPort(port)) {
         const wsPath = lines[1] || null;
         const version = await getChromeVersion(port);
+        // A stale DevToolsActivePort can leave a port that accepts TCP but no
+        // longer speaks CDP; require a real /json/version before trusting it,
+        // otherwise fall through to the COMMON_PORTS probe below.
+        if (!version?.webSocketDebuggerUrl) {
+          continue;
+        }
         const browserName = filePath.includes('Chromium')
           ? 'Chromium'
           : filePath.includes('Chrome Canary')
@@ -256,12 +262,25 @@ async function enablePortGuard(sessionId) {
 
 async function ensureSession(targetId) {
   if (sessions.has(targetId)) return sessions.get(targetId);
-  const resp = await sendCDP('Target.attachToTarget', { targetId, flatten: true });
-  const sessionId = resp.result?.sessionId;
-  if (!sessionId) throw new Error(`attach failed: ${JSON.stringify(resp.error)}`);
-  sessions.set(targetId, sessionId);
-  await enablePortGuard(sessionId);
-  return sessionId;
+  // Newly created background tabs can be briefly un-attachable (Chrome may
+  // freeze/discard them right after creation), so retry attach a few times.
+  let lastError = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const resp = await sendCDP('Target.attachToTarget', { targetId, flatten: true });
+      const sessionId = resp.result?.sessionId;
+      if (sessionId) {
+        sessions.set(targetId, sessionId);
+        await enablePortGuard(sessionId);
+        return sessionId;
+      }
+      lastError = new Error(`attach failed: ${JSON.stringify(resp.error)}`);
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+  throw lastError;
 }
 
 async function waitForLoad(sessionId, timeoutMs = 15000) {
@@ -322,11 +341,11 @@ const server = http.createServer(async (req, res) => {
       const background = q.background === '1' || q.background === 'true';
       const resp = await sendCDP('Target.createTarget', { url: targetUrl, background });
       const targetId = resp.result.targetId;
-      if (targetUrl !== 'about:blank') {
-        try {
-          await ensureSession(targetId);
-        } catch {}
-      }
+      // Bind the CDP session eagerly (including about:blank tabs) so a later
+      // navigate cannot race against Chrome freezing the fresh background tab.
+      try {
+        await ensureSession(targetId);
+      } catch {}
       sendJson(res, { targetId });
     } else if (pathname === '/close') {
       const resp = await sendCDP('Target.closeTarget', { targetId: q.target });
@@ -516,7 +535,23 @@ const server = http.createServer(async (req, res) => {
     } else if (pathname === '/screenshot') {
       const sessionId = await ensureSession(q.target);
       const format = q.format || 'png';
-      const resp = await sendCDP('Page.captureScreenshot', { format, quality: format === 'jpeg' ? 80 : undefined }, sessionId);
+      const captureParams = { format, quality: format === 'jpeg' ? 80 : undefined };
+      if (q.selector) {
+        const expression = `(() => {
+          const element = document.querySelector(${JSON.stringify(q.selector)});
+          if (!element) return null;
+          const rect = element.getBoundingClientRect();
+          return { x: rect.left + window.scrollX, y: rect.top + window.scrollY, width: rect.width, height: rect.height };
+        })()`;
+        const geometry = await sendCDP('Runtime.evaluate', { expression, returnByValue: true }, sessionId);
+        const clip = geometry.result?.result?.value;
+        if (!clip || clip.width <= 0 || clip.height <= 0) {
+          return sendJson(res, { error: 'Screenshot selector not found' }, 404);
+        }
+        captureParams.clip = { ...clip, scale: 1 };
+        captureParams.captureBeyondViewport = true;
+      }
+      const resp = await sendCDP('Page.captureScreenshot', captureParams, sessionId);
       if (q.file) {
         fs.writeFileSync(q.file, Buffer.from(resp.result.data, 'base64'));
         sendJson(res, { saved: q.file });

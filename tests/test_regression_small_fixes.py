@@ -57,10 +57,23 @@ class VersionMetadataTests(unittest.TestCase):
             / "Sidebar.tsx"
         ).read_text(encoding="utf-8")
 
-        self.assertIn('version = "2.3.2"', pyproject)
-        self.assertEqual(bosshunter.__version__, "2.3.2")
-        self.assertEqual(json.loads(health())["version"], "2.3.2")
-        self.assertIn("v2.3.2 · 本地控制台", sidebar_source)
+        version = "2.4.0"
+        frontend = ROOT / "src" / "bosshunter" / "web" / "frontend"
+        package = json.loads((frontend / "package.json").read_text(encoding="utf-8"))
+        lock = json.loads((frontend / "package-lock.json").read_text(encoding="utf-8"))
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+
+        self.assertIn(f'version = "{version}"', pyproject)
+        self.assertEqual(bosshunter.__version__, version)
+        self.assertEqual(json.loads(health())["version"], version)
+        self.assertEqual(package["version"], version)
+        self.assertEqual(lock["version"], version)
+        self.assertEqual(lock["packages"][""]["version"], version)
+        self.assertIn(f"v{version} · 本地控制台", sidebar_source)
+        self.assertIn(f"BossHunter v{version}</h1>", readme)
+        self.assertIn(f"version-v{version}-", readme)
+        self.assertIn(f"## v{version}\n", changelog)
         self.assertNotIn("v1.1.0", sidebar_source)
 
 
@@ -76,6 +89,12 @@ class ConfigExampleTests(unittest.TestCase):
         config = yaml.safe_load((ROOT / "config.example.yaml").read_text(encoding="utf-8"))
 
         self.assertIs(config["profile"]["allow_internship"], False)
+
+    def test_example_includes_salary_filter_controls(self):
+        config = yaml.safe_load((ROOT / "config.example.yaml").read_text(encoding="utf-8"))
+
+        self.assertEqual(config["profile"]["salary_ceil_ratio"], 1.5)
+        self.assertIs(config["profile"]["filter_unparsed_salary"], True)
 
     def test_example_defaults_to_disabled_follow_up(self):
         config = yaml.safe_load((ROOT / "config.example.yaml").read_text(encoding="utf-8"))
@@ -109,6 +128,8 @@ class ConfigValidationTests(unittest.TestCase):
             config = load_config(config_path)
 
         self.assertIs(config["profile"]["allow_internship"], False)
+        self.assertEqual(config["profile"]["salary_ceil_ratio"], 1.5)
+        self.assertIs(config["profile"]["filter_unparsed_salary"], True)
         self.assertNotIn("prefilter_threshold", config["scoring"])
 
     def test_load_config_defaults_to_disabled_follow_up(self):
@@ -342,6 +363,33 @@ class PrefilterHardGateTests(unittest.TestCase):
         self.assertEqual(score, 0)
         self.assertEqual(reason, "薪资低于硬性要求: 12K < 100K")
 
+    def test_salary_ceiling_uses_range_lower_bound(self):
+        from bosshunter.ai.prefilter import quick_score
+
+        config = {"profile": {"deal_breakers": [], "salary_min": 7, "salary_max": 10, "salary_ceil_ratio": 1.0}}
+
+        score, reason = quick_score({"title": "AI产品经理", "jd": "", "salary": "6-11K"}, config)
+
+        self.assertEqual(score, 100, reason)
+        score, reason = quick_score({"title": "AI产品经理", "jd": "", "salary": "15-20K"}, config)
+        self.assertEqual(score, 0)
+        self.assertIn("薪资远超期望上限", reason)
+
+    def test_unparsed_salary_is_filtered_by_default_and_can_be_kept(self):
+        from bosshunter.ai.prefilter import quick_score
+
+        job = {"title": "AI产品经理", "jd": "", "salary": "面议"}
+        score, reason = quick_score(job, {"profile": {"deal_breakers": [], "salary_min": 7}})
+        self.assertEqual(score, 0)
+        self.assertIn("无法解析", reason)
+
+        score, reason = quick_score(
+            job,
+            {"profile": {"deal_breakers": [], "salary_min": 7, "filter_unparsed_salary": False}},
+        )
+        self.assertEqual(score, 100)
+        self.assertIn("交由 AI 判断", reason)
+
     def test_passing_job_returns_hard_gate_pass(self):
         from bosshunter.ai.prefilter import quick_score
 
@@ -408,9 +456,8 @@ class DashboardPageTests(unittest.TestCase):
         self.assertIn("最后刷新：", self.source)
         self.assertIn("refreshing && 'animate-spin'", self.source)
 
-    def test_dashboard_shows_detailed_greeting_queue_progress(self):
-        self.assertIn("if (log.includes('招呼语进度')) return log", self.source)
-        self.assertIn("whitespace-pre-line text-lg", self.source)
+    # Greeting queue progress is covered by rendered component assertions in
+    # DashboardPage.test.tsx; the task panel no longer uses collapsed details.
 
     def test_dashboard_falls_back_to_concrete_task_status(self):
         self.assertNotIn("return '等待后端返回阶段'", self.source)
@@ -581,6 +628,8 @@ class DashboardPageTests(unittest.TestCase):
         self.assertNotIn("全流程卡在打招呼环节", self.source)
         self.assertIn("放弃已失效岗位", self.source)
         self.assertIn("放弃全部", self.source)
+        self.assertIn("sendReadyGreetings(workbench.send_errors.map(job => job.id))", self.source)
+        self.assertNotIn("confirmDeliver(workbench.send_errors.map(job => job.id))", self.source)
 
     def test_monitor_pending_replies_can_be_dismissed(self):
         # Arrange: DashboardPage source is loaded in setUp.
@@ -705,8 +754,9 @@ class SidebarTests(unittest.TestCase):
     def test_sidebar_star_link_places_github_icon_left_and_centers_star_label(self):
         # Act / Assert
         self.assertIn("relative flex items-center", self.source)
-        self.assertIn("absolute left-3", self.source)
-        self.assertIn("mx-auto flex items-center justify-center", self.source)
+        self.assertIn('aria-label="BossHunter GitHub"', self.source)
+        self.assertIn("md:absolute md:left-3", self.source)
+        self.assertIn("mx-auto hidden items-center justify-center gap-2 md:flex", self.source)
         self.assertIn("text-xl", self.source)
         self.assertIn("text-yellow-400", self.source)
 
@@ -779,6 +829,12 @@ class ConfigPageTests(unittest.TestCase):
         self.assertIn("JD 排除关键词", self.source)
         self.assertIn("profile.jd_deal_breakers", self.source)
         self.assertIn("完整 JD 含这些词时会在 AI 评分前跳过", self.source)
+
+    def test_config_page_exposes_salary_filter_controls(self):
+        self.assertIn("薪资上限放宽倍数", self.source)
+        self.assertIn("profile.salary_ceil_ratio", self.source)
+        self.assertIn("过滤面议/无法解析薪资", self.source)
+        self.assertIn("profile.filter_unparsed_salary", self.source)
 
     def test_config_page_api_failure_displays_error_instead_of_infinite_loading(self):
         # Act / Assert
@@ -865,6 +921,15 @@ class ConfigSchemaTests(unittest.TestCase):
         self.assertEqual(allow_field["type"], "switch")
         self.assertIs(allow_field["default"], False)
 
+    def test_schema_includes_salary_filter_controls(self):
+        profile = next(section for section in self.schema["sections"] if section["key"] == "profile")
+        fields = {field["key"]: field for field in profile["fields"]}
+
+        self.assertEqual(fields["salary_ceil_ratio"]["label"], "薪资上限放宽倍数")
+        self.assertEqual(fields["salary_ceil_ratio"]["default"], 1.5)
+        self.assertEqual(fields["filter_unparsed_salary"]["type"], "switch")
+        self.assertIs(fields["filter_unparsed_salary"]["default"], True)
+
     def test_schema_defaults_to_disabled_follow_up(self):
         follow_up = next(section for section in self.schema["sections"] if section["key"] == "follow_up")
         enabled = next(field for field in follow_up["fields"] if field["key"] == "enabled")
@@ -881,6 +946,11 @@ class ScorerPrefilterTests(unittest.TestCase):
     def test_scorer_no_longer_depends_on_prefilter_threshold(self):
         self.assertNotIn("prefilter_threshold", self.source)
         self.assertIn("if qs == 0:", self.source)
+
+    def test_scorer_prompt_includes_salary_ceiling_context(self):
+        self.assertIn("期望薪资区间", self.source)
+        self.assertIn("薪资上限放宽线", self.source)
+        self.assertIn("salary_ceil_ratio", self.source)
 
 
 if __name__ == "__main__":
