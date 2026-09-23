@@ -731,7 +731,7 @@ class DashboardPageTests(unittest.TestCase):
         )
 
     def test_dashboard_shows_automatic_task_deadline_and_stop_reason(self):
-        self.assertIn("自动截止：", self.source)
+        self.assertIn("截止 ", self.source)
         self.assertIn("visibleTask.deadline_at", self.source)
         self.assertIn("visibleTask.stop_reason", self.source)
 
@@ -758,7 +758,7 @@ class SidebarTests(unittest.TestCase):
         self.assertIn("md:absolute md:left-3", self.source)
         self.assertIn("mx-auto hidden items-center justify-center gap-2 md:flex", self.source)
         self.assertIn("text-xl", self.source)
-        self.assertIn("text-yellow-400", self.source)
+        self.assertIn("text-star", self.source)
 
     def test_sidebar_fetches_unresolved_reply_count(self):
         # Act / Assert
