@@ -35,25 +35,26 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # Resolve how to invoke bosshunter: CLI command first, then explicit venv Python,
-# then python3 on PATH (run as `python3 -m bosshunter.main`).
-RUNNER=""
-RUNNER_PREFIX=""
+# then python3 on PATH (run as `python3 -m bosshunter.main`). Arrays keep
+# interpreters and repository paths that contain spaces intact across calls.
+RUNNER=()
+RUNNER_PREFIX=()
 if [ -n "$CUSTOM_PYTHON" ]; then
 	if [ ! -x "$CUSTOM_PYTHON" ]; then
 		echo "[BossHunter] Configured Python was not found: $CUSTOM_PYTHON" >&2
 		exit 1
 	fi
-	RUNNER="$CUSTOM_PYTHON"
-	RUNNER_PREFIX="-m bosshunter.main"
+	RUNNER=("$CUSTOM_PYTHON")
+	RUNNER_PREFIX=(-m bosshunter.main)
 elif command -v bosshunter >/dev/null 2>&1; then
-	RUNNER="bosshunter"
+	RUNNER=("$(command -v bosshunter)")
 elif [ -x "$REPO_ROOT/.venv/bin/python" ]; then
 	# Projects installed inside the repository venv are only importable there.
-	RUNNER="$REPO_ROOT/.venv/bin/python"
-	RUNNER_PREFIX="-m bosshunter.main"
+	RUNNER=("$REPO_ROOT/.venv/bin/python")
+	RUNNER_PREFIX=(-m bosshunter.main)
 elif command -v python3 >/dev/null 2>&1; then
-	RUNNER="$(command -v python3)"
-	RUNNER_PREFIX="-m bosshunter.main"
+	RUNNER=("$(command -v python3)")
+	RUNNER_PREFIX=(-m bosshunter.main)
 else
 	echo "[BossHunter] Could not find BossHunter or Python. Install the project first: see docs/QUICKSTART.md (macOS install section)." >&2
 	exit 1
@@ -107,13 +108,12 @@ if [ "$SKIP_CHROME" -eq 0 ]; then
 fi
 
 echo "[BossHunter] Starting the Browser Runtime..."
-# shellcheck disable=SC2086
-$RUNNER $RUNNER_PREFIX connect || \
-	echo "[BossHunter] Warning: browser connection check failed; the workbench will still be opened." >&2
+if ! "${RUNNER[@]}" "${RUNNER_PREFIX[@]}" connect; then
+	echo "[BossHunter] Warning: browser connection check failed with ${RUNNER[0]}; the workbench will still be opened." >&2
+fi
 
 echo "[BossHunter] Starting the local workbench..."
-# shellcheck disable=SC2086
-cd "$REPO_ROOT" && nohup $RUNNER $RUNNER_PREFIX web --no-open >/dev/null 2>&1 &
+cd "$REPO_ROOT" && nohup "${RUNNER[@]}" "${RUNNER_PREFIX[@]}" web --no-open >/dev/null 2>&1 &
 
 WEB_READY=0
 for _ in $(seq 1 20); do
@@ -124,7 +124,7 @@ for _ in $(seq 1 20); do
 	fi
 done
 if [ "$WEB_READY" -eq 0 ]; then
-	echo "[BossHunter] Warning: the workbench did not answer on $WORKBENCH_URL within 10 seconds." >&2
+	echo "[BossHunter] Warning: the workbench did not answer on $WORKBENCH_URL within 10 seconds (runner: ${RUNNER[0]})." >&2
 fi
 
 if [ "$SKIP_CHROME" -eq 0 ]; then
